@@ -1,0 +1,839 @@
+{
+  "id": "2c0f1e3dd8fbe0c7",
+  "name": "YouTube Scraper → Google Sheets",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## YouTube scraper → Google Sheets\n\n**Setup (once):** paste your Google Sheet URL in **CONFIG**, select the *Google Sheets* credential on the 4 Sheets nodes and the *YouTube API Key* (Query Auth) credential on the 3 YouTube nodes.\n\n**First run** creates the **Inputs** tab (with 2 examples) and the **Videos** tab automatically.\n\n**Inputs tab, column A** accepts: search words · video URL (watch / youtu.be / shorts) · playlist URL · channel @handle or /channel/UC… URL. Column B = max videos (1–50), column C = FALSE to pause a row. Columns D–F are written back with Last Run / Status / Videos Found.\n\n**Videos tab:** one row per video (title, channel, description, publish date, views, likes, comments, duration, tags…). Re-runs **update** existing rows instead of duplicating them.\n\nUses the official YouTube Data API v3 (stable, ToS-compliant — no HTML scraping that breaks).\n",
+        "height": 420,
+        "width": 820,
+        "color": 4
+      },
+      "id": "9d2d0d54-f8bc-764b-6d5a-3102c6d7f03c",
+      "name": "Note: Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -80,
+        -480
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "1ef242d0-39ae-21ce-414d-efcb982bb233",
+      "name": "▶ Run Scraper (manual)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "65d1bbab-e6ad-f214-5d66-bb409b174f13",
+      "name": "⏰ Daily 6:00 AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ╔══════════════════════════════════════════════════════════════════╗\n// ║  CONFIG — the only node you edit. Paste the Google Sheet ID/URL.  ║\n// ╚══════════════════════════════════════════════════════════════════╝\nconst CONFIG = {\n  sheets: {\n    spreadsheet: 'PASTE_YOUR_GOOGLE_SHEET_URL_OR_ID_XXXXXX',  // ← full URL is fine\n    inputsTab: 'Inputs',   // what to scrape (auto-created with examples on first run)\n    videosTab: 'Videos',   // results (auto-created; one row per video, updated in place)\n  },\n  youtube: {\n    defaultMaxResults: 10,      // per input row when column B is empty (1–50)\n    searchOrder: 'relevance',   // relevance | date | viewCount | rating | title\n    regionCode: '',             // optional 2-letter country for searches, e.g. 'IN'\n    maxSearchesPerRun: 20,      // quota guard: each search costs 100 of your 10,000 daily units\n  },\n};\n\n// ── validation ──\nconst problems = [];\nlet id = String(CONFIG.sheets.spreadsheet || '').trim();\nconst m = /\\/spreadsheets\\/d\\/([A-Za-z0-9_-]+)/.exec(id);\nif (m) id = m[1];\nif (/XXXXXX/.test(id)) problems.push('sheets.spreadsheet is still the placeholder — paste your Google Sheet URL.');\nelse if (!/^[A-Za-z0-9_-]{25,}$/.test(id)) problems.push('sheets.spreadsheet must be a Google Sheet URL or its ID (the long part after /d/).');\nfor (const k of ['inputsTab', 'videosTab']) if (!String(CONFIG.sheets[k] || '').trim()) problems.push('sheets.' + k + ' is empty.');\nif (CONFIG.sheets.inputsTab.trim().toLowerCase() === CONFIG.sheets.videosTab.trim().toLowerCase()) problems.push('inputsTab and videosTab must be different tabs.');\nconst y = CONFIG.youtube;\nif (!Number.isInteger(y.defaultMaxResults) || y.defaultMaxResults < 1 || y.defaultMaxResults > 50) problems.push('youtube.defaultMaxResults must be 1–50.');\nif (!['relevance', 'date', 'viewCount', 'rating', 'title'].includes(y.searchOrder)) problems.push('youtube.searchOrder must be relevance, date, viewCount, rating or title.');\nif (y.regionCode && !/^[A-Za-z]{2}$/.test(y.regionCode)) problems.push('youtube.regionCode must be 2 letters (e.g. IN) or empty.');\nif (!Number.isInteger(y.maxSearchesPerRun) || y.maxSearchesPerRun < 0 || y.maxSearchesPerRun > 90) problems.push('youtube.maxSearchesPerRun must be 0–90.');\nif (problems.length) throw new Error('CONFIG needs attention → ' + problems.join(' • '));\n\nconst base = 'https://sheets.googleapis.com/v4/spreadsheets/' + id;\nreturn [{ json: {\n  ...CONFIG,\n  sheets: { ...CONFIG.sheets, spreadsheetId: id, inputsTab: CONFIG.sheets.inputsTab.trim(), videosTab: CONFIG.sheets.videosTab.trim() },\n  urls: {\n    sheetsBase: base,\n    meta: base + '?fields=' + encodeURIComponent('properties.title,sheets.properties(sheetId,title,gridProperties)'),\n    youtube: 'https://www.googleapis.com/youtube/v3',\n  },\n} }];\n"
+      },
+      "id": "d4517405-92b5-2403-5eb8-ea3be978e47c",
+      "name": "CONFIG",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        100
+      ],
+      "notes": "← edit me",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.urls.meta }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "540db60d-e421-437b-824c-6398967d4deb",
+      "name": "Sheets: Read Spreadsheet",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── shared helpers: normalise HTTP Request node output ───────────────────\n// HTTP nodes run with \"Full Response\" + \"Never Error\", so every API answer\n// (2xx or not) arrives as { statusCode, body }. Transport failures (DNS,\n// timeout, reset) arrive as { error } because the node continues on error.\nfunction apiMessage(b, fallback) {\n  if (b === null || b === undefined || b === '') return fallback || 'Empty response body';\n  if (typeof b === 'string') return b.slice(0, 400);\n  if (b.error !== undefined) {\n    const e = b.error;\n    if (typeof e === 'string') return e + (b.message ? ': ' + b.message : '') + (b.needed ? ' (needed scope: ' + b.needed + ')' : '');\n    if (e && typeof e === 'object') {\n      const reason = Array.isArray(e.errors) && e.errors[0] && e.errors[0].reason ? ' [' + e.errors[0].reason + ']' : '';\n      return [e.type || e.status || e.code, e.message].filter(Boolean).join(': ') + reason;\n    }\n  }\n  if (b.message) return String(b.message);\n  return JSON.stringify(b).slice(0, 400);\n}\nfunction readHttp(item) {\n  const j = (item && item.json) || {};\n  if (Object.prototype.hasOwnProperty.call(j, 'statusCode') && Object.prototype.hasOwnProperty.call(j, 'body')) {\n    let body = j.body;\n    if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { /* keep raw text */ } }\n    const status = Number(j.statusCode) || 0;\n    const ok = status >= 200 && status < 300;\n    return { ok, status, body, message: ok ? '' : 'HTTP ' + status + ' — ' + apiMessage(body, j.statusMessage) };\n  }\n  if (Object.prototype.hasOwnProperty.call(j, 'error')) {\n    const e = j.error;\n    let msg = typeof e === 'string' ? e : (e && (e.message || e.description || e.code)) || '';\n    if (!msg) { try { msg = JSON.stringify(e).slice(0, 300); } catch (x) { msg = 'unknown'; } }\n    return { ok: false, status: 0, body: null, message: 'Request failed before a response was received: ' + msg };\n  }\n  return { ok: true, status: 200, body: j, message: '' };\n}\nfunction pairOrThrow(responses, requests, label) {\n  if (responses.length !== requests.length) {\n    throw new Error(label + ': expected ' + requests.length + ' responses but got ' + responses.length +\n      '. An HTTP node changed its item count — check that pagination/batching was not modified.');\n  }\n}\n\n\nconst INPUT_HEADER = ['Input', 'Max Results', 'Enabled', 'Last Run', 'Status', 'Videos Found'];\nconst VIDEO_HEADER = ['Video ID', 'Video URL', 'Title', 'Channel Name', 'Channel ID', 'Description', 'Publish Date', 'View Count', 'Like Count', 'Comment Count', 'Duration', 'Tags', 'Thumbnail URL', 'Source Input', 'Last Updated', 'First Seen'];\nconst q = t => \"'\" + String(t).replace(/'/g, \"''\") + \"'\";   // A1-notation tab quoting\n\n\nconst cfg = $('CONFIG').first().json;\nconst r = readHttp($input.first());\nif (!r.ok) {\n  throw new Error('Could not open the Google Sheet. ' + r.message + googleHint(r, 'Google Sheets API') +\n    (r.status === 404 || r.status === 403 ? ' The sheet must be owned by, or shared (Editor) with, the Google account connected in n8n.' : ''));\n}\nconst sheets = (r.body.sheets || []).map(s => s.properties);\nconst find = t => sheets.find(s => String(s.title).trim().toLowerCase() === t.toLowerCase());\nconst tabNames = {}, requests = [], created = [];\nlet nextId = 700000000 + Math.floor(Math.random() * 100000000);\nconst cell = v => (typeof v === 'number' ? { userEnteredValue: { numberValue: v } } : { userEnteredValue: { stringValue: String(v) } });\nconst boldRow = vals => ({ values: vals.map(v => ({ ...cell(v), userEnteredFormat: { textFormat: { bold: true } } })) });\nconst plainRow = vals => ({ values: vals.map(cell) });\n\nfor (const [key, wanted, rows] of [\n  ['inputs', cfg.sheets.inputsTab, [boldRow(INPUT_HEADER), plainRow(['n8n automation tutorial', 5, 'TRUE']), plainRow(['https://www.youtube.com/@n8n-io', 5, 'TRUE'])]],\n  ['videos', cfg.sheets.videosTab, [boldRow(VIDEO_HEADER)]],\n]) {\n  const existing = find(wanted);\n  if (existing) { tabNames[key] = existing.title; continue; }\n  const sheetId = nextId++;\n  tabNames[key] = wanted;\n  created.push(wanted);\n  requests.push({ addSheet: { properties: { sheetId, title: wanted, gridProperties: { frozenRowCount: 1 } } } });\n  requests.push({ appendCells: { sheetId, rows, fields: 'userEnteredValue,userEnteredFormat.textFormat.bold' } });\n}\nconst ranges = [q(tabNames.inputs) + '!A1:F5000', q(tabNames.videos) + '!A1:P1', q(tabNames.videos) + '!A2:A'];\nconst readUrl = cfg.urls.sheetsBase + '/values:batchGet?majorDimension=ROWS&valueRenderOption=FORMATTED_VALUE&' +\n  ranges.map(x => 'ranges=' + encodeURIComponent(x)).join('&');\nreturn [{ json: { needsSetup: requests.length > 0, requests, created, tabNames, readUrl, sheetTitle: r.body.properties ? r.body.properties.title : '' } }];\n\n\nfunction googleHint(r, api) {\n  const m = String(r.message || '');\n  if (/accessNotConfigured|SERVICE_DISABLED|has not been used in project|is disabled/i.test(m))\n    return ' → Enable the ' + api + ' in Google Cloud Console (APIs & Services → Library) for the project that owns your OAuth client, wait 2 minutes, re-run.';\n  if (r.status === 401) return ' → The Google credential is no longer authorised. Open the credential in n8n and click \"Sign in with Google\" again.';\n  if (r.status === 403 && /insufficient|scope/i.test(m)) return ' → The Google credential lacks a scope. Reconnect it (\"Sign in with Google\") and tick every permission box.';\n  if (r.status === 403) return ' → Permission denied. Make sure the signed-in Google account can edit this file/folder.';\n  if (r.status === 404) return ' → Not found. Check the ID in CONFIG and that the signed-in Google account has access to it.';\n  if (r.status === 429) return ' → Google rate limit. Re-run in a minute.';\n  return '';\n}\n"
+      },
+      "id": "ce766cd2-621b-a97f-ff9a-89cf9f1d98fd",
+      "name": "Plan Tabs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        680,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "27813cd9-c4f6-1f9d-895a-98b93d63504a",
+              "leftValue": "={{ $json.needsSetup }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "6f37e9dc-d06e-e014-6908-2d0971e26a86",
+      "name": "Tabs Missing?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        900,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('CONFIG').first().json.urls.sheetsBase + ':batchUpdate' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ requests: $json.requests }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "4e41fa00-ba93-5ac1-4d8d-6efa0962f96c",
+      "name": "Sheets: Create Tabs",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        -20
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── shared helpers: normalise HTTP Request node output ───────────────────\n// HTTP nodes run with \"Full Response\" + \"Never Error\", so every API answer\n// (2xx or not) arrives as { statusCode, body }. Transport failures (DNS,\n// timeout, reset) arrive as { error } because the node continues on error.\nfunction apiMessage(b, fallback) {\n  if (b === null || b === undefined || b === '') return fallback || 'Empty response body';\n  if (typeof b === 'string') return b.slice(0, 400);\n  if (b.error !== undefined) {\n    const e = b.error;\n    if (typeof e === 'string') return e + (b.message ? ': ' + b.message : '') + (b.needed ? ' (needed scope: ' + b.needed + ')' : '');\n    if (e && typeof e === 'object') {\n      const reason = Array.isArray(e.errors) && e.errors[0] && e.errors[0].reason ? ' [' + e.errors[0].reason + ']' : '';\n      return [e.type || e.status || e.code, e.message].filter(Boolean).join(': ') + reason;\n    }\n  }\n  if (b.message) return String(b.message);\n  return JSON.stringify(b).slice(0, 400);\n}\nfunction readHttp(item) {\n  const j = (item && item.json) || {};\n  if (Object.prototype.hasOwnProperty.call(j, 'statusCode') && Object.prototype.hasOwnProperty.call(j, 'body')) {\n    let body = j.body;\n    if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { /* keep raw text */ } }\n    const status = Number(j.statusCode) || 0;\n    const ok = status >= 200 && status < 300;\n    return { ok, status, body, message: ok ? '' : 'HTTP ' + status + ' — ' + apiMessage(body, j.statusMessage) };\n  }\n  if (Object.prototype.hasOwnProperty.call(j, 'error')) {\n    const e = j.error;\n    let msg = typeof e === 'string' ? e : (e && (e.message || e.description || e.code)) || '';\n    if (!msg) { try { msg = JSON.stringify(e).slice(0, 300); } catch (x) { msg = 'unknown'; } }\n    return { ok: false, status: 0, body: null, message: 'Request failed before a response was received: ' + msg };\n  }\n  return { ok: true, status: 200, body: j, message: '' };\n}\nfunction pairOrThrow(responses, requests, label) {\n  if (responses.length !== requests.length) {\n    throw new Error(label + ': expected ' + requests.length + ' responses but got ' + responses.length +\n      '. An HTTP node changed its item count — check that pagination/batching was not modified.');\n  }\n}\n\n\nconst r = readHttp($input.first());\nif (!r.ok) throw new Error('Could not create the tabs ' + $('Plan Tabs').first().json.created.join(', ') + '. ' + r.message + googleHint(r, 'Google Sheets API'));\nreturn [{ json: { created: $('Plan Tabs').first().json.created } }];\n\n\nfunction googleHint(r, api) {\n  const m = String(r.message || '');\n  if (/accessNotConfigured|SERVICE_DISABLED|has not been used in project|is disabled/i.test(m))\n    return ' → Enable the ' + api + ' in Google Cloud Console (APIs & Services → Library) for the project that owns your OAuth client, wait 2 minutes, re-run.';\n  if (r.status === 401) return ' → The Google credential is no longer authorised. Open the credential in n8n and click \"Sign in with Google\" again.';\n  if (r.status === 403 && /insufficient|scope/i.test(m)) return ' → The Google credential lacks a scope. Reconnect it (\"Sign in with Google\") and tick every permission box.';\n  if (r.status === 403) return ' → Permission denied. Make sure the signed-in Google account can edit this file/folder.';\n  if (r.status === 404) return ' → Not found. Check the ID in CONFIG and that the signed-in Google account has access to it.';\n  if (r.status === 429) return ' → Google rate limit. Re-run in a minute.';\n  return '';\n}\n"
+      },
+      "id": "1233fad5-7cee-cd66-498d-5b16bf14ec77",
+      "name": "Verify Tabs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1340,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Plan Tabs').first().json.readUrl }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "ea524463-0d21-5824-ebb7-159db1620845",
+      "name": "Sheets: Read Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1560,
+        100
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── shared helpers: normalise HTTP Request node output ───────────────────\n// HTTP nodes run with \"Full Response\" + \"Never Error\", so every API answer\n// (2xx or not) arrives as { statusCode, body }. Transport failures (DNS,\n// timeout, reset) arrive as { error } because the node continues on error.\nfunction apiMessage(b, fallback) {\n  if (b === null || b === undefined || b === '') return fallback || 'Empty response body';\n  if (typeof b === 'string') return b.slice(0, 400);\n  if (b.error !== undefined) {\n    const e = b.error;\n    if (typeof e === 'string') return e + (b.message ? ': ' + b.message : '') + (b.needed ? ' (needed scope: ' + b.needed + ')' : '');\n    if (e && typeof e === 'object') {\n      const reason = Array.isArray(e.errors) && e.errors[0] && e.errors[0].reason ? ' [' + e.errors[0].reason + ']' : '';\n      return [e.type || e.status || e.code, e.message].filter(Boolean).join(': ') + reason;\n    }\n  }\n  if (b.message) return String(b.message);\n  return JSON.stringify(b).slice(0, 400);\n}\nfunction readHttp(item) {\n  const j = (item && item.json) || {};\n  if (Object.prototype.hasOwnProperty.call(j, 'statusCode') && Object.prototype.hasOwnProperty.call(j, 'body')) {\n    let body = j.body;\n    if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { /* keep raw text */ } }\n    const status = Number(j.statusCode) || 0;\n    const ok = status >= 200 && status < 300;\n    return { ok, status, body, message: ok ? '' : 'HTTP ' + status + ' — ' + apiMessage(body, j.statusMessage) };\n  }\n  if (Object.prototype.hasOwnProperty.call(j, 'error')) {\n    const e = j.error;\n    let msg = typeof e === 'string' ? e : (e && (e.message || e.description || e.code)) || '';\n    if (!msg) { try { msg = JSON.stringify(e).slice(0, 300); } catch (x) { msg = 'unknown'; } }\n    return { ok: false, status: 0, body: null, message: 'Request failed before a response was received: ' + msg };\n  }\n  return { ok: true, status: 200, body: j, message: '' };\n}\nfunction pairOrThrow(responses, requests, label) {\n  if (responses.length !== requests.length) {\n    throw new Error(label + ': expected ' + requests.length + ' responses but got ' + responses.length +\n      '. An HTTP node changed its item count — check that pagination/batching was not modified.');\n  }\n}\n\n\nconst INPUT_HEADER = ['Input', 'Max Results', 'Enabled', 'Last Run', 'Status', 'Videos Found'];\nconst VIDEO_HEADER = ['Video ID', 'Video URL', 'Title', 'Channel Name', 'Channel ID', 'Description', 'Publish Date', 'View Count', 'Like Count', 'Comment Count', 'Duration', 'Tags', 'Thumbnail URL', 'Source Input', 'Last Updated', 'First Seen'];\nconst q = t => \"'\" + String(t).replace(/'/g, \"''\") + \"'\";   // A1-notation tab quoting\n\n\nconst cfg = $('CONFIG').first().json;\nconst tabs = $('Plan Tabs').first().json.tabNames;\nconst r = readHttp($input.first());\nif (!r.ok) throw new Error('Could not read the sheet tabs. ' + r.message + googleHint(r, 'Google Sheets API'));\nconst vr = (r.body && r.body.valueRanges) || [];\nconst inputRows = (vr[0] && vr[0].values) || [];\nconst videoHeader = ((vr[1] && vr[1].values) || [[]])[0] || [];\nconst idRows = (vr[2] && vr[2].values) || [];\n\nif (videoHeader.length && String(videoHeader[0]).trim() !== VIDEO_HEADER[0]) {\n  throw new Error('The \"' + tabs.videos + '\" tab has data that this workflow did not create (A1 = \"' + videoHeader[0] + '\"). Use an empty tab: rename that tab or set CONFIG.sheets.videosTab to a new name.');\n}\nconst existing = {};\nidRows.forEach((row, i) => { const v = String(row[0] || '').trim(); if (v && !existing[v]) existing[v] = i + 2; });\n\n// ---- classify each input row ----\nfunction classify(raw) {\n  const s = raw.trim();\n  if (/^@[\\w.\\-]{3,}$/.test(s)) return { type: 'channel', by: 'forHandle', value: s };\n  // Manual URL parsing (the Code-node sandbox does not guarantee a global URL class).\n  const um = /^(?:https?:\\/\\/)?((?:[a-z0-9-]+\\.)*(?:youtube\\.com|youtu\\.be|youtube-nocookie\\.com))(\\/[^?#]*)?(?:\\?([^#]*))?/i.exec(s);\n  if (!um) return { type: 'search', value: s };\n  const params = {};\n  for (const kv of (um[3] || '').split('&')) { if (!kv) continue; const i = kv.indexOf('='); const k = decodeURIComponent(i < 0 ? kv : kv.slice(0, i)); if (!(k in params)) params[k] = i < 0 ? '' : decodeURIComponent(kv.slice(i + 1).replace(/\\+/g, ' ')); }\n  const u = { hostname: um[1].toLowerCase(), pathname: um[2] || '/', searchParams: { get: k => (k in params ? params[k] : null) } };\n  const host = u.hostname.replace(/^(www|m|music)\\./, '');\n  const path = u.pathname, v = u.searchParams.get('v'), list = u.searchParams.get('list');\n  let m;\n  if (host === 'youtu.be' && (m = /^\\/([\\w-]{11})/.exec(path))) return { type: 'video', value: m[1] };\n  if (v && /^[\\w-]{11}$/.test(v)) return { type: 'video', value: v };\n  if ((m = /^\\/(shorts|live|embed|v)\\/([\\w-]{11})/.exec(path))) return { type: 'video', value: m[2] };\n  if (list) return { type: 'playlist', value: list };\n  if ((m = /^\\/channel\\/(UC[\\w-]{22})/.exec(path))) return { type: 'channel', by: 'id', value: m[1] };\n  if ((m = /^\\/(@[^/?#]+)/.exec(path))) return { type: 'channel', by: 'forHandle', value: decodeURIComponent(m[1]) };\n  if ((m = /^\\/user\\/([^/?#]+)/.exec(path))) return { type: 'channel', by: 'forUsername', value: decodeURIComponent(m[1]) };\n  if (/^\\/c\\//.test(path)) return { type: 'unsupported', value: s, reason: 'Legacy /c/ channel URLs cannot be resolved by the YouTube API — open the channel and paste its @handle URL instead.' };\n  return { type: 'unsupported', value: s, reason: 'Unrecognised YouTube URL. Use a video, playlist, @handle/channel URL, or plain search words.' };\n}\n\nconst Y = cfg.urls.youtube, yt = cfg.youtube;\nconst hasHeader = String((inputRows[0] || [])[0] || '').trim().toLowerCase() === 'input';\nconst jobs = [], resolveReqs = [], listReqs = [], videoRefs = [];\nlet searches = 0;\ninputRows.forEach((row, i) => {\n  if (hasHeader && i === 0) return;\n  const input = String(row[0] || '').trim();\n  if (!input) return;\n  const enabled = String(row[2] === undefined ? '' : row[2]).trim().toLowerCase();\n  if (['false', 'no', 'n', '0', 'off', 'disabled'].includes(enabled)) return;\n  const n = parseInt(String(row[1] || '').replace(/[^0-9]/g, ''), 10);\n  const max = Math.min(50, Math.max(1, Number.isFinite(n) && n > 0 ? n : yt.defaultMaxResults));\n  const c = classify(input);\n  const job = { idx: jobs.length, row: i + 1, input, type: c.type, max, error: '', note: '', found: 0 };\n  jobs.push(job);\n  if (c.type === 'unsupported') { job.error = c.reason; return; }\n  if (c.type === 'video') { videoRefs.push({ id: c.value, jobIdx: job.idx }); return; }\n  if (c.type === 'playlist') { listReqs.push({ jobIdx: job.idx, kind: 'playlist', url: Y + '/playlistItems?part=contentDetails&maxResults=' + max + '&playlistId=' + encodeURIComponent(c.value) }); return; }\n  if (c.type === 'channel' && c.by === 'id') { listReqs.push({ jobIdx: job.idx, kind: 'channel', url: Y + '/playlistItems?part=contentDetails&maxResults=' + max + '&playlistId=' + encodeURIComponent('UU' + c.value.slice(2)) }); return; }\n  if (c.type === 'channel') { resolveReqs.push({ jobIdx: job.idx, url: Y + '/channels?part=contentDetails&' + c.by + '=' + encodeURIComponent(c.value) }); return; }\n  if (searches >= yt.maxSearchesPerRun) { job.error = 'Skipped — CONFIG.youtube.maxSearchesPerRun (' + yt.maxSearchesPerRun + ') reached for this run.'; return; }\n  searches++;\n  listReqs.push({ jobIdx: job.idx, kind: 'search', url: Y + '/search?part=id&type=video&maxResults=' + max + '&order=' + yt.searchOrder +\n    (yt.regionCode ? '&regionCode=' + yt.regionCode.toUpperCase() : '') + '&q=' + encodeURIComponent(input) });\n});\n\nreturn [{ json: {\n  jobs, resolveReqs, listReqs, videoRefs,\n  sheet: { tabNames: tabs, existing, videosHeaderMissing: videoHeader.length === 0 },\n  note: jobs.length ? '' : 'No enabled rows in the \"' + tabs.inputs + '\" tab — add a search term, video, playlist or channel URL in column A.',\n} }];\n\n\nfunction googleHint(r, api) {\n  const m = String(r.message || '');\n  if (/accessNotConfigured|SERVICE_DISABLED|has not been used in project|is disabled/i.test(m))\n    return ' → Enable the ' + api + ' in Google Cloud Console (APIs & Services → Library) for the project that owns your OAuth client, wait 2 minutes, re-run.';\n  if (r.status === 401) return ' → The Google credential is no longer authorised. Open the credential in n8n and click \"Sign in with Google\" again.';\n  if (r.status === 403 && /insufficient|scope/i.test(m)) return ' → The Google credential lacks a scope. Reconnect it (\"Sign in with Google\") and tick every permission box.';\n  if (r.status === 403) return ' → Permission denied. Make sure the signed-in Google account can edit this file/folder.';\n  if (r.status === 404) return ' → Not found. Check the ID in CONFIG and that the signed-in Google account has access to it.';\n  if (r.status === 429) return ' → Google rate limit. Re-run in a minute.';\n  return '';\n}\n"
+      },
+      "id": "11fb5df8-9a66-fd45-00da-15b5eb4f8f00",
+      "name": "Plan Jobs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1780,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "d41da3d4-111d-31ab-8d23-41f400582296",
+              "leftValue": "={{ $json.resolveReqs.length > 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "bf148acd-51c9-632e-e840-67a6e7d07c1e",
+      "name": "Has Channel Lookups?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2000,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const plan = $input.first().json;\nreturn plan.resolveReqs.map((r, i) => ({ json: { url: r.url, jobIdx: r.jobIdx, plan: i === 0 ? plan : null } }));\n"
+      },
+      "id": "299654b5-0aaf-0c3f-8957-8bea21a54203",
+      "name": "Split Channel Lookups",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2220,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "3eb162d6-f8f7-9b61-10e4-db7d507a4ffa",
+      "name": "YouTube: Channel Lookup",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2440,
+        -20
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── shared helpers: normalise HTTP Request node output ───────────────────\n// HTTP nodes run with \"Full Response\" + \"Never Error\", so every API answer\n// (2xx or not) arrives as { statusCode, body }. Transport failures (DNS,\n// timeout, reset) arrive as { error } because the node continues on error.\nfunction apiMessage(b, fallback) {\n  if (b === null || b === undefined || b === '') return fallback || 'Empty response body';\n  if (typeof b === 'string') return b.slice(0, 400);\n  if (b.error !== undefined) {\n    const e = b.error;\n    if (typeof e === 'string') return e + (b.message ? ': ' + b.message : '') + (b.needed ? ' (needed scope: ' + b.needed + ')' : '');\n    if (e && typeof e === 'object') {\n      const reason = Array.isArray(e.errors) && e.errors[0] && e.errors[0].reason ? ' [' + e.errors[0].reason + ']' : '';\n      return [e.type || e.status || e.code, e.message].filter(Boolean).join(': ') + reason;\n    }\n  }\n  if (b.message) return String(b.message);\n  return JSON.stringify(b).slice(0, 400);\n}\nfunction readHttp(item) {\n  const j = (item && item.json) || {};\n  if (Object.prototype.hasOwnProperty.call(j, 'statusCode') && Object.prototype.hasOwnProperty.call(j, 'body')) {\n    let body = j.body;\n    if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { /* keep raw text */ } }\n    const status = Number(j.statusCode) || 0;\n    const ok = status >= 200 && status < 300;\n    return { ok, status, body, message: ok ? '' : 'HTTP ' + status + ' — ' + apiMessage(body, j.statusMessage) };\n  }\n  if (Object.prototype.hasOwnProperty.call(j, 'error')) {\n    const e = j.error;\n    let msg = typeof e === 'string' ? e : (e && (e.message || e.description || e.code)) || '';\n    if (!msg) { try { msg = JSON.stringify(e).slice(0, 300); } catch (x) { msg = 'unknown'; } }\n    return { ok: false, status: 0, body: null, message: 'Request failed before a response was received: ' + msg };\n  }\n  return { ok: true, status: 200, body: j, message: '' };\n}\nfunction pairOrThrow(responses, requests, label) {\n  if (responses.length !== requests.length) {\n    throw new Error(label + ': expected ' + requests.length + ' responses but got ' + responses.length +\n      '. An HTTP node changed its item count — check that pagination/batching was not modified.');\n  }\n}\n\n\nconst split = $('Split Channel Lookups').all().map(i => i.json);\nconst plan = split[0].plan;\nconst resps = $input.all();\npairOrThrow(resps, split, 'Apply Channel Lookups');\nresps.forEach((it, i) => {\n  const job = plan.jobs[split[i].jobIdx];\n  const r = readHttp(it);\n  if (!r.ok) { job.error = 'Channel lookup failed: ' + r.message + ytHint(r); return; }\n  const ch = (r.body.items || [])[0];\n  if (!ch) { job.error = 'Channel not found — check the @handle / URL.'; return; }\n  const uploads = ch.contentDetails && ch.contentDetails.relatedPlaylists && ch.contentDetails.relatedPlaylists.uploads;\n  if (!uploads) { job.error = 'This channel has no public uploads.'; return; }\n  plan.listReqs.push({ jobIdx: job.idx, kind: 'channel', url: $('CONFIG').first().json.urls.youtube + '/playlistItems?part=contentDetails&maxResults=' + job.max + '&playlistId=' + encodeURIComponent(uploads) });\n});\nreturn [{ json: plan }];\n\n\nfunction ytHint(r) {\n  const m = String(r.message || '');\n  if (/quotaExceeded|dailyLimitExceeded/i.test(m)) return ' → YouTube daily quota used up (10,000 units/day; each search = 100). It resets at midnight Pacific time.';\n  if (/API key not valid|keyInvalid|API_KEY_INVALID/i.test(m)) return ' → The YouTube API key is wrong: fix the \"YouTube API Key\" credential (Query Auth, name = key).';\n  if (/accessNotConfigured|SERVICE_DISABLED|has not been used/i.test(m)) return ' → Enable \"YouTube Data API v3\" in Google Cloud Console for the project that owns the key.';\n  if (/forbidden|API_KEY_.*BLOCKED|referer|ipRefererBlocked/i.test(m)) return ' → The API key has restrictions that block this server. Allow YouTube Data API v3 and remove HTTP-referrer restrictions.';\n  if (/playlistNotFound/i.test(m)) return ' → Playlist not found or private.';\n  return '';\n}\n"
+      },
+      "id": "e4bbddb0-7bd5-fb38-a484-fb43c21f680d",
+      "name": "Apply Channel Lookups",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2660,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "7383cd3d-e05c-dba7-33eb-aa350d4f64b7",
+              "leftValue": "={{ $json.listReqs.length > 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "41ac60c9-e2d4-5a86-cdb1-669a72804a42",
+      "name": "Has List Requests?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2880,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const plan = $input.first().json;\nreturn plan.listReqs.map((r, i) => ({ json: { url: r.url, jobIdx: r.jobIdx, kind: r.kind, plan: i === 0 ? plan : null } }));\n"
+      },
+      "id": "33ccb83c-0cca-5ae6-88bd-41774a06dc5b",
+      "name": "Split List Requests",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3100,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "59985345-6ef0-a958-318e-8f49bc7018b8",
+      "name": "YouTube: Search & Playlists",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3320,
+        -20
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── shared helpers: normalise HTTP Request node output ───────────────────\n// HTTP nodes run with \"Full Response\" + \"Never Error\", so every API answer\n// (2xx or not) arrives as { statusCode, body }. Transport failures (DNS,\n// timeout, reset) arrive as { error } because the node continues on error.\nfunction apiMessage(b, fallback) {\n  if (b === null || b === undefined || b === '') return fallback || 'Empty response body';\n  if (typeof b === 'string') return b.slice(0, 400);\n  if (b.error !== undefined) {\n    const e = b.error;\n    if (typeof e === 'string') return e + (b.message ? ': ' + b.message : '') + (b.needed ? ' (needed scope: ' + b.needed + ')' : '');\n    if (e && typeof e === 'object') {\n      const reason = Array.isArray(e.errors) && e.errors[0] && e.errors[0].reason ? ' [' + e.errors[0].reason + ']' : '';\n      return [e.type || e.status || e.code, e.message].filter(Boolean).join(': ') + reason;\n    }\n  }\n  if (b.message) return String(b.message);\n  return JSON.stringify(b).slice(0, 400);\n}\nfunction readHttp(item) {\n  const j = (item && item.json) || {};\n  if (Object.prototype.hasOwnProperty.call(j, 'statusCode') && Object.prototype.hasOwnProperty.call(j, 'body')) {\n    let body = j.body;\n    if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { /* keep raw text */ } }\n    const status = Number(j.statusCode) || 0;\n    const ok = status >= 200 && status < 300;\n    return { ok, status, body, message: ok ? '' : 'HTTP ' + status + ' — ' + apiMessage(body, j.statusMessage) };\n  }\n  if (Object.prototype.hasOwnProperty.call(j, 'error')) {\n    const e = j.error;\n    let msg = typeof e === 'string' ? e : (e && (e.message || e.description || e.code)) || '';\n    if (!msg) { try { msg = JSON.stringify(e).slice(0, 300); } catch (x) { msg = 'unknown'; } }\n    return { ok: false, status: 0, body: null, message: 'Request failed before a response was received: ' + msg };\n  }\n  return { ok: true, status: 200, body: j, message: '' };\n}\nfunction pairOrThrow(responses, requests, label) {\n  if (responses.length !== requests.length) {\n    throw new Error(label + ': expected ' + requests.length + ' responses but got ' + responses.length +\n      '. An HTTP node changed its item count — check that pagination/batching was not modified.');\n  }\n}\n\n\nconst split = $('Split List Requests').all().map(i => i.json);\nconst plan = split[0].plan;\nconst resps = $input.all();\npairOrThrow(resps, split, 'Apply List Results');\nresps.forEach((it, i) => {\n  const { jobIdx, kind } = split[i];\n  const job = plan.jobs[jobIdx];\n  const r = readHttp(it);\n  if (!r.ok) { job.error = (kind === 'search' ? 'Search' : 'Playlist') + ' failed: ' + r.message + ytHint(r); return; }\n  const ids = (r.body.items || []).map(x => kind === 'search' ? (x.id && x.id.videoId) : (x.contentDetails && x.contentDetails.videoId)).filter(Boolean);\n  if (!ids.length) job.note = 'No videos returned.';\n  for (const id of ids) plan.videoRefs.push({ id, jobIdx });\n});\nreturn [{ json: plan }];\n\n\nfunction ytHint(r) {\n  const m = String(r.message || '');\n  if (/quotaExceeded|dailyLimitExceeded/i.test(m)) return ' → YouTube daily quota used up (10,000 units/day; each search = 100). It resets at midnight Pacific time.';\n  if (/API key not valid|keyInvalid|API_KEY_INVALID/i.test(m)) return ' → The YouTube API key is wrong: fix the \"YouTube API Key\" credential (Query Auth, name = key).';\n  if (/accessNotConfigured|SERVICE_DISABLED|has not been used/i.test(m)) return ' → Enable \"YouTube Data API v3\" in Google Cloud Console for the project that owns the key.';\n  if (/forbidden|API_KEY_.*BLOCKED|referer|ipRefererBlocked/i.test(m)) return ' → The API key has restrictions that block this server. Allow YouTube Data API v3 and remove HTTP-referrer restrictions.';\n  if (/playlistNotFound/i.test(m)) return ' → Playlist not found or private.';\n  return '';\n}\n"
+      },
+      "id": "0179f85a-0271-eea2-a21c-54efe50519c7",
+      "name": "Apply List Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3540,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "cfd1cf8c-6320-fbc0-9674-505d3444c50b",
+              "leftValue": "={{ $json.videoRefs.length > 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "id": "beed2088-6163-f4f5-7cf6-0684fda1ad5f",
+      "name": "Has Videos?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        3760,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const plan = $input.first().json;\nconst ids = [...new Set(plan.videoRefs.map(v => v.id))];\nconst out = [];\nfor (let i = 0; i < ids.length; i += 50) {\n  const chunk = ids.slice(i, i + 50);\n  out.push({ json: { ids: chunk, url: $('CONFIG').first().json.urls.youtube + '/videos?part=snippet,statistics,contentDetails&maxResults=50&id=' + chunk.join(','), plan: i === 0 ? plan : null } });\n}\nreturn out;\n"
+      },
+      "id": "80458041-67d7-0554-f4a0-f5210755e2e3",
+      "name": "Split Video Batches",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3980,
+        -20
+      ]
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "f49464c2-7059-f483-c426-0f1da7de929a",
+      "name": "YouTube: Video Details",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4200,
+        -20
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── shared helpers: normalise HTTP Request node output ───────────────────\n// HTTP nodes run with \"Full Response\" + \"Never Error\", so every API answer\n// (2xx or not) arrives as { statusCode, body }. Transport failures (DNS,\n// timeout, reset) arrive as { error } because the node continues on error.\nfunction apiMessage(b, fallback) {\n  if (b === null || b === undefined || b === '') return fallback || 'Empty response body';\n  if (typeof b === 'string') return b.slice(0, 400);\n  if (b.error !== undefined) {\n    const e = b.error;\n    if (typeof e === 'string') return e + (b.message ? ': ' + b.message : '') + (b.needed ? ' (needed scope: ' + b.needed + ')' : '');\n    if (e && typeof e === 'object') {\n      const reason = Array.isArray(e.errors) && e.errors[0] && e.errors[0].reason ? ' [' + e.errors[0].reason + ']' : '';\n      return [e.type || e.status || e.code, e.message].filter(Boolean).join(': ') + reason;\n    }\n  }\n  if (b.message) return String(b.message);\n  return JSON.stringify(b).slice(0, 400);\n}\nfunction readHttp(item) {\n  const j = (item && item.json) || {};\n  if (Object.prototype.hasOwnProperty.call(j, 'statusCode') && Object.prototype.hasOwnProperty.call(j, 'body')) {\n    let body = j.body;\n    if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { /* keep raw text */ } }\n    const status = Number(j.statusCode) || 0;\n    const ok = status >= 200 && status < 300;\n    return { ok, status, body, message: ok ? '' : 'HTTP ' + status + ' — ' + apiMessage(body, j.statusMessage) };\n  }\n  if (Object.prototype.hasOwnProperty.call(j, 'error')) {\n    const e = j.error;\n    let msg = typeof e === 'string' ? e : (e && (e.message || e.description || e.code)) || '';\n    if (!msg) { try { msg = JSON.stringify(e).slice(0, 300); } catch (x) { msg = 'unknown'; } }\n    return { ok: false, status: 0, body: null, message: 'Request failed before a response was received: ' + msg };\n  }\n  return { ok: true, status: 200, body: j, message: '' };\n}\nfunction pairOrThrow(responses, requests, label) {\n  if (responses.length !== requests.length) {\n    throw new Error(label + ': expected ' + requests.length + ' responses but got ' + responses.length +\n      '. An HTTP node changed its item count — check that pagination/batching was not modified.');\n  }\n}\n\n\nconst INPUT_HEADER = ['Input', 'Max Results', 'Enabled', 'Last Run', 'Status', 'Videos Found'];\nconst VIDEO_HEADER = ['Video ID', 'Video URL', 'Title', 'Channel Name', 'Channel ID', 'Description', 'Publish Date', 'View Count', 'Like Count', 'Comment Count', 'Duration', 'Tags', 'Thumbnail URL', 'Source Input', 'Last Updated', 'First Seen'];\nconst q = t => \"'\" + String(t).replace(/'/g, \"''\") + \"'\";   // A1-notation tab quoting\n\n\nconst cfg = $('CONFIG').first().json;\nconst inp = $input.all();\nlet plan, split = [], resps = [];\nif (inp.length === 1 && inp[0].json && Array.isArray(inp[0].json.jobs)) {\n  plan = inp[0].json;                         // arrived via \"Has Videos? = false\"\n} else {\n  split = $('Split Video Batches').all().map(i => i.json);\n  plan = split[0].plan;\n  pairOrThrow(inp, split, 'Build Sheet Writes');\n  resps = inp.map(readHttp);\n}\nif (!plan.jobs.length) return [];            // nothing to do (see Plan Jobs note)\n\nconst details = new Map(), failedIds = new Map();\nresps.forEach((r, i) => {\n  if (!r.ok) { for (const id of split[i].ids) failedIds.set(id, r.message + ytHint(r)); return; }\n  for (const v of (r.body.items || [])) details.set(v.id, v);\n});\n\nconst zone = $now.zoneName;\nconst pubFmt = iso => { const d = DateTime.fromISO(String(iso || ''), { zone: 'utc' }); return d.isValid ? d.setZone(zone).toFormat('yyyy-LL-dd HH:mm') : ''; };\nconst dur = iso => {\n  const m = /^P(?:(\\d+)D)?(?:T(?:(\\d+)H)?(?:(\\d+)M)?(?:(\\d+)S)?)?$/.exec(String(iso || ''));\n  if (!m) return '';\n  const t = (+m[1] || 0) * 86400 + (+m[2] || 0) * 3600 + (+m[3] || 0) * 60 + (+m[4] || 0);\n  if (!t) return '';\n  const h = Math.floor(t / 3600), mi = Math.floor((t % 3600) / 60), s = t % 60, p = x => String(x).padStart(2, '0');\n  return h ? h + ':' + p(mi) + ':' + p(s) : mi + ':' + p(s);\n};\nconst num = v => (v === undefined || v === null || v === '' ? '' : Number(v));\nconst txt = (v, n) => String(v === undefined || v === null ? '' : v).replace(/[\\u0000-\\u0008\\u000B\\u000C\\u000E-\\u001F]/g, '').slice(0, n || 45000);\nconst now = $now.toFormat('yyyy-LL-dd HH:mm:ss');\n\n// one row per unique video; remember every input that found it\nconst sources = new Map();\nfor (const ref of plan.videoRefs) {\n  const job = plan.jobs[ref.jobIdx];\n  if (details.has(ref.id)) {\n    if (!sources.has(ref.id)) sources.set(ref.id, []);\n    if (!sources.get(ref.id).includes(job.input)) sources.get(ref.id).push(job.input);\n    job.found++;\n  } else if (failedIds.has(ref.id)) {\n    job.error = job.error || 'Video details failed: ' + failedIds.get(ref.id);\n  } else {\n    job.note = 'Some videos are private, deleted or unavailable.';\n  }\n}\n\nconst T = plan.sheet.tabNames;\nconst data = [], appends = [];\nlet updated = 0;\nif (plan.sheet.videosHeaderMissing) data.push({ range: q(T.videos) + '!A1:P1', values: [VIDEO_HEADER] });\nfor (const [id, srcs] of sources) {\n  const v = details.get(id), sn = v.snippet || {}, st = v.statistics || {}, cd = v.contentDetails || {};\n  const th = sn.thumbnails || {};\n  const thumb = (th.maxres || th.high || th.medium || th.default || {}).url || '';\n  const row = [id, 'https://www.youtube.com/watch?v=' + id, txt(sn.title, 500), txt(sn.channelTitle, 300), txt(sn.channelId, 50),\n    txt(sn.description), pubFmt(sn.publishedAt), num(st.viewCount), num(st.likeCount), num(st.commentCount), dur(cd.duration),\n    txt((sn.tags || []).join(', '), 2000), thumb, txt(srcs.join(' | '), 1000), now];\n  const at = plan.sheet.existing[id];\n  if (at) { data.push({ range: q(T.videos) + '!A' + at + ':O' + at, values: [row] }); updated++; }   // keep \"First Seen\" (col P)\n  else appends.push([...row, now]);\n}\nfor (const job of plan.jobs) {\n  const status = job.error ? '❌ ' + job.error : job.found ? '✅ OK' + (job.note ? ' — ' + job.note : '') : '⚠️ ' + (job.note || 'No videos found.');\n  data.push({ range: q(T.inputs) + '!D' + job.row + ':F' + job.row, values: [[now, txt(status, 1000), job.found]] });\n}\n\nconst base = cfg.urls.sheetsBase;\nconst ops = [{ json: { op: 'update', url: base + '/values:batchUpdate', body: { valueInputOption: 'RAW', data } } }];\n// Runs strictly AFTER the update above (HTTP node batch size = 1), so the header row always exists first.\nif (appends.length) ops.push({ json: { op: 'append', url: base + '/values/' + encodeURIComponent(q(T.videos) + '!A1') + ':append?valueInputOption=RAW&insertDataOption=INSERT_ROWS', body: { values: appends } } });\nops[0].json.summary = { inputs: plan.jobs.length, videos: sources.size, updated, appended: appends.length,\n  failedInputs: plan.jobs.filter(j => j.error).map(j => 'row ' + j.row + ' (' + j.input + '): ' + j.error) };\nreturn ops;\n\n\nfunction ytHint(r) {\n  const m = String(r.message || '');\n  if (/quotaExceeded|dailyLimitExceeded/i.test(m)) return ' → YouTube daily quota used up (10,000 units/day; each search = 100). It resets at midnight Pacific time.';\n  if (/API key not valid|keyInvalid|API_KEY_INVALID/i.test(m)) return ' → The YouTube API key is wrong: fix the \"YouTube API Key\" credential (Query Auth, name = key).';\n  if (/accessNotConfigured|SERVICE_DISABLED|has not been used/i.test(m)) return ' → Enable \"YouTube Data API v3\" in Google Cloud Console for the project that owns the key.';\n  if (/forbidden|API_KEY_.*BLOCKED|referer|ipRefererBlocked/i.test(m)) return ' → The API key has restrictions that block this server. Allow YouTube Data API v3 and remove HTTP-referrer restrictions.';\n  if (/playlistNotFound/i.test(m)) return ' → Playlist not found or private.';\n  return '';\n}\n"
+      },
+      "id": "974693ee-82f8-774a-c917-401f0dc2cb76",
+      "name": "Build Sheet Writes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4420,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleSheetsOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          },
+          "timeout": 120000,
+          "batching": {
+            "batch": {
+              "batchSize": 1,
+              "batchInterval": 500
+            }
+          }
+        }
+      },
+      "id": "0e12f07a-feb3-4021-28a9-a6865c69356e",
+      "name": "Sheets: Write Results",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        4640,
+        100
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ── shared helpers: normalise HTTP Request node output ───────────────────\n// HTTP nodes run with \"Full Response\" + \"Never Error\", so every API answer\n// (2xx or not) arrives as { statusCode, body }. Transport failures (DNS,\n// timeout, reset) arrive as { error } because the node continues on error.\nfunction apiMessage(b, fallback) {\n  if (b === null || b === undefined || b === '') return fallback || 'Empty response body';\n  if (typeof b === 'string') return b.slice(0, 400);\n  if (b.error !== undefined) {\n    const e = b.error;\n    if (typeof e === 'string') return e + (b.message ? ': ' + b.message : '') + (b.needed ? ' (needed scope: ' + b.needed + ')' : '');\n    if (e && typeof e === 'object') {\n      const reason = Array.isArray(e.errors) && e.errors[0] && e.errors[0].reason ? ' [' + e.errors[0].reason + ']' : '';\n      return [e.type || e.status || e.code, e.message].filter(Boolean).join(': ') + reason;\n    }\n  }\n  if (b.message) return String(b.message);\n  return JSON.stringify(b).slice(0, 400);\n}\nfunction readHttp(item) {\n  const j = (item && item.json) || {};\n  if (Object.prototype.hasOwnProperty.call(j, 'statusCode') && Object.prototype.hasOwnProperty.call(j, 'body')) {\n    let body = j.body;\n    if (typeof body === 'string') { try { body = JSON.parse(body); } catch (e) { /* keep raw text */ } }\n    const status = Number(j.statusCode) || 0;\n    const ok = status >= 200 && status < 300;\n    return { ok, status, body, message: ok ? '' : 'HTTP ' + status + ' — ' + apiMessage(body, j.statusMessage) };\n  }\n  if (Object.prototype.hasOwnProperty.call(j, 'error')) {\n    const e = j.error;\n    let msg = typeof e === 'string' ? e : (e && (e.message || e.description || e.code)) || '';\n    if (!msg) { try { msg = JSON.stringify(e).slice(0, 300); } catch (x) { msg = 'unknown'; } }\n    return { ok: false, status: 0, body: null, message: 'Request failed before a response was received: ' + msg };\n  }\n  return { ok: true, status: 200, body: j, message: '' };\n}\nfunction pairOrThrow(responses, requests, label) {\n  if (responses.length !== requests.length) {\n    throw new Error(label + ': expected ' + requests.length + ' responses but got ' + responses.length +\n      '. An HTTP node changed its item count — check that pagination/batching was not modified.');\n  }\n}\n\n\nconst ops = $('Build Sheet Writes').all().map(i => i.json);\nconst resps = $input.all();\npairOrThrow(resps, ops, 'Run Summary');\nconst errors = [];\nresps.forEach((it, i) => { const r = readHttp(it); if (!r.ok) errors.push(ops[i].op + ': ' + r.message + googleHint(r, 'Google Sheets API')); });\nif (errors.length) throw new Error('Writing to Google Sheets failed: ' + errors.join(' | '));\nconst s = ops[0].summary;\nif (s.inputs > 0 && s.failedInputs.length === s.inputs) {\n  throw new Error('Every input failed, so nothing was scraped. First error: ' + s.failedInputs[0]);\n}\nreturn [{ json: { status: s.failedInputs.length ? '⚠️ Done with ' + s.failedInputs.length + ' failed input(s) — see the Status column' : '✅ Done',\n  inputsProcessed: s.inputs, uniqueVideos: s.videos, rowsUpdated: s.updated, rowsAdded: s.appended, failedInputs: s.failedInputs } }];\n\n\nfunction googleHint(r, api) {\n  const m = String(r.message || '');\n  if (/accessNotConfigured|SERVICE_DISABLED|has not been used in project|is disabled/i.test(m))\n    return ' → Enable the ' + api + ' in Google Cloud Console (APIs & Services → Library) for the project that owns your OAuth client, wait 2 minutes, re-run.';\n  if (r.status === 401) return ' → The Google credential is no longer authorised. Open the credential in n8n and click \"Sign in with Google\" again.';\n  if (r.status === 403 && /insufficient|scope/i.test(m)) return ' → The Google credential lacks a scope. Reconnect it (\"Sign in with Google\") and tick every permission box.';\n  if (r.status === 403) return ' → Permission denied. Make sure the signed-in Google account can edit this file/folder.';\n  if (r.status === 404) return ' → Not found. Check the ID in CONFIG and that the signed-in Google account has access to it.';\n  if (r.status === 429) return ' → Google rate limit. Re-run in a minute.';\n  return '';\n}\n"
+      },
+      "id": "6c7aef44-6c57-0f6c-7d13-6a7235c14ed3",
+      "name": "Run Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4860,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "▶ Run Scraper (manual)": {
+      "main": [
+        [
+          {
+            "node": "CONFIG",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⏰ Daily 6:00 AM": {
+      "main": [
+        [
+          {
+            "node": "CONFIG",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CONFIG": {
+      "main": [
+        [
+          {
+            "node": "Sheets: Read Spreadsheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sheets: Read Spreadsheet": {
+      "main": [
+        [
+          {
+            "node": "Plan Tabs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan Tabs": {
+      "main": [
+        [
+          {
+            "node": "Tabs Missing?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Tabs Missing?": {
+      "main": [
+        [
+          {
+            "node": "Sheets: Create Tabs",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Sheets: Read Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sheets: Create Tabs": {
+      "main": [
+        [
+          {
+            "node": "Verify Tabs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Tabs": {
+      "main": [
+        [
+          {
+            "node": "Sheets: Read Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sheets: Read Data": {
+      "main": [
+        [
+          {
+            "node": "Plan Jobs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Plan Jobs": {
+      "main": [
+        [
+          {
+            "node": "Has Channel Lookups?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Channel Lookups?": {
+      "main": [
+        [
+          {
+            "node": "Split Channel Lookups",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Has List Requests?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Channel Lookups": {
+      "main": [
+        [
+          {
+            "node": "YouTube: Channel Lookup",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "YouTube: Channel Lookup": {
+      "main": [
+        [
+          {
+            "node": "Apply Channel Lookups",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply Channel Lookups": {
+      "main": [
+        [
+          {
+            "node": "Has List Requests?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has List Requests?": {
+      "main": [
+        [
+          {
+            "node": "Split List Requests",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Has Videos?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split List Requests": {
+      "main": [
+        [
+          {
+            "node": "YouTube: Search & Playlists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "YouTube: Search & Playlists": {
+      "main": [
+        [
+          {
+            "node": "Apply List Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply List Results": {
+      "main": [
+        [
+          {
+            "node": "Has Videos?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Videos?": {
+      "main": [
+        [
+          {
+            "node": "Split Video Batches",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build Sheet Writes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Video Batches": {
+      "main": [
+        [
+          {
+            "node": "YouTube: Video Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "YouTube: Video Details": {
+      "main": [
+        [
+          {
+            "node": "Build Sheet Writes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Sheet Writes": {
+      "main": [
+        [
+          {
+            "node": "Sheets: Write Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sheets: Write Results": {
+      "main": [
+        [
+          {
+            "node": "Run Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "callerPolicy": "workflowsFromSameOwner",
+    "timezone": "Asia/Kolkata"
+  },
+  "pinData": {},
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
