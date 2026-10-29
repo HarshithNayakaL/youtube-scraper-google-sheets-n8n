@@ -2,6 +2,8 @@
 
 An n8n workflow that extracts YouTube video details into a structured Google Sheet. It uses the **official YouTube Data API v3**, so it's stable and within YouTube's terms of service, with no HTML scraping that breaks when the page changes.
 
+**Case study:** [harshith-nayaka-l-portfolio.vercel.app/work/youtube-scraper-google-sheets](https://harshith-nayaka-l-portfolio.vercel.app/work/youtube-scraper-google-sheets): the problem, the architecture and the engineering decisions behind this workflow.
+
 **Captured per video:**
 - Title, channel name, description, publish date and view count
 - Like count, comment count, duration, tags, thumbnail, channel ID, video URL
